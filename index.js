@@ -1,8 +1,6 @@
 
 const puppeteer = require('puppeteer-extra');
 const base64Img = require('base64-img');
-const fs = require('fs');
-const axios = require('axios');
 const captchaSolver = require('2captcha-node');
 
 require('dotenv').config();
@@ -110,20 +108,16 @@ const monitorOffice = async (office) => {
       await sleep(1000);
 
       console.log('logged in');
-
-      // Make Your Reservation
       await page.screenshot({ path: './output/Reservation.png', fullPage: true });
       await page.click('#ctl00_repFunzioni_ctl00_btnMenuItem');
       await sleep(1000);
 
-      // Citizenship
       console.log('at citizenship page');
       await page.screenshot({ path: './output/Citizenship.png', fullPage: true });
       await page.click('#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio');
       await page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua');
       await sleep(1000);
 
-      // Calendar
       console.log('at calendar page');
       await page.screenshot({ path: './output/Calendar.png', fullPage: true });
     } catch (err) {
