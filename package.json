@@ -1,0 +1,27 @@
+{
+  "name": "auto-prenota",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "debug": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "2captcha-node": "2.0.3",
+    "axios": "0.19.2",
+    "base64-img": "1.0.4",
+    "dotenv": "8.2.0",
+    "fs": "0.0.1-security",
+    "puppeteer": "2.1.1",
+    "puppeteer-extra": "3.1.9"
+  },
+  "devDependencies": {
+    "eslint": "6.8.0",
+    "eslint-config-airbnb-base": "14.0.0",
+    "eslint-plugin-import": "2.20.1"
+  }
+}
