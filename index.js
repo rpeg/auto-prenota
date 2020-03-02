@@ -1,8 +1,6 @@
 
 const puppeteer = require('puppeteer-extra');
 const base64Img = require('base64-img');
-const fs = require('fs');
-const axios = require('axios');
 const captchaSolver = require('2captcha-node');
 
 require('dotenv').config();
@@ -34,17 +32,29 @@ const chromeOptions = {
 
 const getLoginPage = (cid) => `https://prenotaonline.esteri.it/login.aspx?cidsede=${cid}&returnUrl=//`;
 
-const downloadFile = (url, dest) => axios({
-  url,
-  responseType: 'stream',
-}).then(
-  (res) => new Promise((resolve, reject) => {
-    res.data
-      .pipe(fs.createWriteStream(dest))
-      .on('finish', () => resolve(true))
-      .on('error', (e) => reject(e));
-  }),
-);
+const screenshotDOMElm = async (page, selector, path) => {
+  // eslint-disable-next-line no-shadow
+  const rect = await page.evaluate((selector) => {
+    // eslint-disable-next-line no-undef
+    const element = document.querySelector(selector);
+    const {
+      x, y, width, height,
+    } = element.getBoundingClientRect();
+    return {
+      left: x, top: y, width, height, id: element.id,
+    };
+  }, selector);
+
+  return page.screenshot({
+    path,
+    clip: {
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    },
+  });
+};
 
 const convertCaptchaToBase64 = () => new Promise((resolve, reject) => {
   base64Img.base64(CAPTCHA_PATH, (err, data) => {
@@ -59,22 +69,17 @@ const monitorOffice = async (office) => {
 
     try {
       const page = await browser.newPage();
+      page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 2 });
 
       await page.goto(getLoginPage(office.cid));
       await page.click('#BtnLogin');
-
-      await sleep(2000);
+      await sleep(1500);
 
       console.log('login page');
 
-      const captchaElmSrc = await page.$eval('#captchaLogin', (el) => el.getAttribute('src'));
-      const captchaUrl = `https://prenotaonline.esteri.it/${captchaElmSrc}.jpeg`;
+      await screenshotDOMElm(page, '#captchaLogin', CAPTCHA_PATH);
 
-      const downloadSuccess = await downloadFile(captchaUrl, CAPTCHA_PATH);
-
-      if (!downloadSuccess) throw new Error('captcha download failed');
-
-      console.log('captcha downloaded');
+      console.log('captcha screenshotted');
 
       const base64 = await convertCaptchaToBase64();
 
@@ -103,23 +108,18 @@ const monitorOffice = async (office) => {
       await sleep(1000);
 
       console.log('logged in');
-
-      // Make Your Reservation
       await page.screenshot({ path: './output/Reservation.png', fullPage: true });
       await page.click('#ctl00_repFunzioni_ctl00_btnMenuItem');
       await sleep(1000);
 
-      // Citizenship
       console.log('at citizenship page');
       await page.screenshot({ path: './output/Citizenship.png', fullPage: true });
-      await page.click('ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio');
-      await page.click('ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua');
+      await page.click('#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio');
+      await page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua');
       await sleep(1000);
 
-      // Calendar
       console.log('at calendar page');
       await page.screenshot({ path: './output/Calendar.png', fullPage: true });
-    //   });
     } catch (err) {
       console.log(err);
     } finally {
