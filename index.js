@@ -163,8 +163,11 @@ const monitorOffice = async (office) => {
       page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 2 });
 
       await page.goto(getLoginPage(office.cid));
-      await page.click('#BtnLogin');
-      await page.waitFor(1000);
+
+      await Promise.all([
+        page.click('#BtnLogin'),
+        page.waitForNavigation({ waitUntil: 'networkidle2' }),
+      ]);
 
       logger.info('at login page');
 
@@ -191,19 +194,30 @@ const monitorOffice = async (office) => {
       await page.type('#UserName', office.username);
       await page.waitForSelector('#Password');
       await page.type('#Password', office.password);
-      await page.click('#BtnConfermaL');
-      await page.waitFor(1000);
 
-      logger.info('logged in');
+      await Promise.all([
+        page.click('#BtnConfermaL'),
+        page.waitForNavigation({ waitUntil: 'networkidle2' }),
+      ]);
 
-      await page.click('#ctl00_repFunzioni_ctl00_btnMenuItem');
-      await page.waitFor(1000);
+      logger.info('clicked login');
+
+      await Promise.all([
+        page.click('#ctl00_repFunzioni_ctl00_btnMenuItem'),
+        page.waitForNavigation({ waitUntil: 'networkidle2' }),
+      ]);
 
       logger.info('at citizenship page');
 
-      await page.click('#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio');
-      await page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua');
-      await page.waitFor(1000);
+      await Promise.all([
+        page.click('#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio'),
+        page.waitForNavigation({ waitUntil: 'networkidle2' }),
+      ]);
+
+      await Promise.all([
+        page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua'),
+        page.waitForNavigation({ waitUntil: 'networkidle2' }),
+      ]);
 
       logger.info('at calendar page');
 
@@ -237,14 +251,15 @@ const monitorOffice = async (office) => {
         const prevButton = await currentTab.$$('[value="<"]');
 
         // open in new tab
-        await page.keyboard.down('MetaLeft');
+        await currentTab.keyboard.down('MetaLeft');
         await prevButton[0].click();
-        await page.keyboard.up('MetaLeft');
+        await currentTab.keyboard.up('MetaLeft');
 
         d.subtract(1, 'month');
         logger.info(`tab opening for ${d.format('MMMM YYYY')}`);
 
         const newPage = await newPagePromise;
+        newPage.waitForSelector('#calendar', { timeout: 3000 });
 
         await newPage.screenshot({ path: `./output/${pid}_${d.format('MMMM')}_${d.format('YYYY')}.png`, fullPage: true });
 
@@ -295,7 +310,7 @@ const monitorOffice = async (office) => {
       await browser.close();
       if (!success) {
         logger.info('process unsuccessful; trying again after waiting period');
-        setTimeout(() => monitorOffice(office), REFRESH_PERIOD);
+        setTimeout(() => monitorOffice(office), 5000);
       }
     }
   });
