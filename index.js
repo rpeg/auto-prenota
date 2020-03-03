@@ -7,6 +7,8 @@ const captchaSolver = require('2captcha-node');
 const moment = require('moment');
 const nodemailer = require('nodemailer');
 const xoauth2 = require('xoauth2');
+const shortid = require('shortid');
+const winston = require('winston');
 
 require('dotenv').config();
 
@@ -33,20 +35,20 @@ const months = [
 const offices = {
   LA: {
     cid: 100034,
-    name: 'Los Angeles',
+    name: 'LA',
     username: process.env.PRENOTA_LA_LOGIN,
     password: process.env.PRENOTA_LA_PW,
   },
   SF: {
     cid: 100012,
-    name: 'San Francisco',
+    name: 'SF',
     username: process.env.PRENOTA_SF_LOGIN,
     password: process.env.PRENOTA_SF_PW,
   },
 };
 
 const chromeOptions = {
-  headless: true,
+  headless: false,
   defaultViewport: null,
   slowMo: 10,
 };
@@ -84,7 +86,11 @@ const convertCaptchaToBase64 = () => new Promise((resolve, reject) => {
   });
 });
 
-const isSessionTimeout = (page) => page.evaluate(() => window.find('Session timeout'));
+const checkForSessionTimeout = async (page) => {
+  if (await page.evaluate(() => window.find('Session timeout'))) {
+    throw new Error(`session timeout at ${new Date().toISOString()}`);
+  }
+};
 
 const getCalendarDate = (calendarTitle) => {
   const match = calendarTitle.match(/(\w+), (\d+)/);
@@ -99,7 +105,7 @@ const getOpenDayElms = async (page) => {
   const medElms = await page.$$('.calendarCellMed input');
   const allElms = [...openElms, ...medElms];
 
-  console.log(allElms);
+  logger.info(allElms);
 
   return allElms;
 };
@@ -130,9 +136,9 @@ const notifyMe = (officeName, dateStr) => {
 
   transport.sendMail(message, (err, info) => {
     if (err) {
-      console.log(err);
+      logger.log('error', err);
     } else {
-      console.log(info);
+      logger.info(info);
     }
   });
 };
@@ -140,8 +146,16 @@ const notifyMe = (officeName, dateStr) => {
 const monitorOffice = async (office) => {
   let success = false;
 
+  const pid = shortid();
+  const logger = winston.createLogger({
+    format: winston.format.printf((info) => `[${pid}] ${info.message}`),
+    transports: [
+      new winston.transports.Console(),
+    ],
+  });
+
   puppeteer.launch(chromeOptions).then(async (browser) => {
-    console.log(`launching monitor process at ${new Date().toISOString()} for ${office.name}`);
+    logger.info(`launching monitor process at ${new Date().toISOString()} for ${office.name}`);
 
     try {
       const page = await browser.newPage();
@@ -153,16 +167,15 @@ const monitorOffice = async (office) => {
       await page.click('#BtnLogin');
       await page.waitFor(1000);
 
-
-      console.log('at login page');
+      logger.info('at login page');
 
       await screenshotDOMElm(page, '#captchaLogin', CAPTCHA_PATH);
 
-      console.log('captcha screencapped');
+      logger.info('captcha screencapped');
 
       const base64 = await convertCaptchaToBase64();
 
-      console.log('captcha converted to base64');
+      logger.info('captcha converted to base64');
 
       const captcha = await solver.solve({
         image: base64.toString(),
@@ -171,7 +184,7 @@ const monitorOffice = async (office) => {
 
       if (!captcha || !captcha.text) throw new Error('captcha solve failed');
 
-      console.log(`captcha solved: ${captcha.text}`);
+      logger.info(`captcha solved: ${captcha.text}`);
 
       await page.waitForSelector('#loginCaptcha');
       await page.type('#loginCaptcha', captcha.text);
@@ -182,51 +195,59 @@ const monitorOffice = async (office) => {
       await page.click('#BtnConfermaL');
       await page.waitFor(1000);
 
-      console.log('logged in');
+      logger.info('logged in');
 
-      await page.screenshot({ path: './output/Reservation.png', fullPage: true });
       await page.click('#ctl00_repFunzioni_ctl00_btnMenuItem');
       await page.waitFor(1000);
 
-      console.log('at citizenship page');
+      logger.info('at citizenship page');
 
-      await page.screenshot({ path: './output/Citizenship.png', fullPage: true });
       await page.click('#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio');
       await page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua');
       await page.waitFor(1000);
 
-      console.log('at calendar page');
-      await page.screenshot({ path: './output/Calendar.png', fullPage: true });
+      logger.info('at calendar page');
 
       const span = await page.$$('tr.calTitolo span');
       const calendarTitle = await page.evaluate((e) => e.textContent, span[0]);
       const { month, year } = getCalendarDate(calendarTitle);
 
-      console.log(`start date: ${month + 1}/${year}`);
-
       const d = moment();
+
       const numMonthsAheadOfCurrent = month >= d.month()
         ? ((year - d.year()) * 12) + month - d.month()
         : (Math.ceil(0, year - 1 - d.year()) * 12) + (11 - d.month()) + month;
 
+      d.add(numMonthsAheadOfCurrent, 'month');
+
+      logger.info(`start date: ${month + 1}/${year} (${numMonthsAheadOfCurrent} months ahead)`);
+
       // open prev months in new tabs, until we reach current month
       for (let i = 0; i < numMonthsAheadOfCurrent; i += 1) {
-        const newPagePromise = new Promise((x) => browser.once('targetcreated', (target) => x(target.page())));
-        const prevButton = await page.$$('[value="<"]');
-        await prevButton[0].click({ button: 'middle' }); // new tab
+        const currentTab = tabs.slice(-1)[0];
+
+        const newPagePromise = new Promise((resolve) => browser.once('targetcreated',
+          (target) => resolve(target.page())));
+        const prevButton = await currentTab.$$('[value="<"]');
+
+        // open in new tab
+        await page.keyboard.down('MetaLeft');
+        await prevButton[0].click();
+        await page.keyboard.up('MetaLeft');
+
+        d.subtract(1, 'month');
+        logger.info(`tab opening for ${d.format('MMMM YYYY')}`);
+
         const newPage = await newPagePromise;
 
-        await newPage.screenshot({ path: `./output/tab_${i}.png`, fullPage: true });
+        await newPage.screenshot({ path: `./output/${pid}_${d.format('MMMM')}_${d.format('YYYY')}.png`, fullPage: true });
 
-        if (isSessionTimeout(newPage)) throw new Error(`session timeout at ${new Date().toISOString()}`);
+        await checkForSessionTimeout();
 
         tabs.push(newPage);
-
-        d.subtract('months', 1);
-        console.log(`tab opened for ${d.format('MMMM YYYY')}`);
       }
 
-      console.log('tabs created');
+      logger.info('tabs created');
 
       // monitor each tab for open slots
       tabs.forEach(async (tab, i) => {
@@ -237,12 +258,12 @@ const monitorOffice = async (office) => {
 
           if (openDayElms.length) {
             const m = moment();
-            m.subtract('months', i);
+            m.subtract(i, 'mon');
 
             const dateStr = m.format('MMMM YYYY');
 
             const foundStatement = `open slot found in ${office.name}, ${dateStr}`;
-            console.log(foundStatement);
+            logger.info(foundStatement);
 
             notifyMe(office.name, dateStr);
 
@@ -250,23 +271,24 @@ const monitorOffice = async (office) => {
           } else {
             await tab.waitFor(REFRESH_PERIOD);
             await tab.reload({ waitUntil: ['networkidle0', 'domcontentloaded'] }); // refresh
+            await checkForSessionTimeout();
           }
         }
 
         // try to capture html after clicking open day
         await openDayElms[0].click();
         await tab.waitFor(1500);
+        await checkForSessionTimeout();
         const html = await tab.content();
         fs.writeFileSync('./output/open-day.html', html);
       });
     } catch (err) {
-      console.log(err);
+      logger.log('error', err);
     } finally {
       await browser.close();
       if (!success) {
-        console.log('process failed; trying again after waiting period');
-        setTimeout(() => {}, REFRESH_PERIOD);
-        monitorOffice(office);
+        logger.info('process unsuccessful; trying again after waiting period');
+        setTimeout(() => monitorOffice(office), REFRESH_PERIOD);
       }
     }
   });
