@@ -10,11 +10,13 @@ const nodemailer = require('nodemailer');
 const xoauth2 = require('xoauth2');
 const shortid = require('shortid');
 const winston = require('winston');
+const fs = require('fs');
 
 require('dotenv').config();
 
 const CAPTCHA_PATH = './output/captcha.jpeg';
 const REFRESH_PERIOD = 20000;
+const CONSECUTIVE_ERROR_LIMIT = 8;
 
 const solver = captchaSolver.default(process.env.KEY);
 
@@ -142,6 +144,9 @@ const notifyMe = (officeName, dateStr) => {
   });
 };
 
+// Track consecutive errors so we don't waste cycles
+const consecutiveErrors = [];
+
 const monitorOffice = async (office) => {
   let success = false;
 
@@ -251,15 +256,17 @@ const monitorOffice = async (office) => {
         const prevButton = await currentTab.$$('[value="<"]');
 
         // open in new tab
+        logger.info(`tab opening for ${d.format('MMMM YYYY')}`);
         await currentTab.keyboard.down('MetaLeft');
         await prevButton[0].click();
         await currentTab.keyboard.up('MetaLeft');
 
         d.subtract(1, 'month');
-        logger.info(`tab opening for ${d.format('MMMM YYYY')}`);
 
         const newPage = await newPagePromise;
-        newPage.waitForSelector('#calendar', { timeout: 3000 });
+        newPage.waitForNavigation({ waitUntil: ['networkidle2', 'domcontentloaded'] });
+        const html = await newPage.content();
+        fs.writeFileSync(`./output/${pid}_newTab.html`, html);
 
         await newPage.screenshot({ path: `./output/${pid}_${d.format('MMMM')}_${d.format('YYYY')}.png`, fullPage: true });
 
@@ -291,7 +298,7 @@ const monitorOffice = async (office) => {
             success = true;
           } else {
             await tab.waitFor(REFRESH_PERIOD);
-            await tab.reload({ waitUntil: ['networkidle0', 'domcontentloaded'] }); // refresh
+            await tab.reload({ waitUntil: ['networkidle2', 'domcontentloaded'] }); // refresh
             await checkForSessionTimeout(tab);
           }
         }
@@ -305,12 +312,17 @@ const monitorOffice = async (office) => {
         tab.screenshot({ path: `./output/${pid}_after_date_click.png`, fullPage: true });
       });
     } catch (err) {
+      consecutiveErrors.push(err);
       logger.log('error', err);
     } finally {
       await browser.close();
       if (!success) {
+        const atErrorLimit = consecutiveErrors.length >= CONSECUTIVE_ERROR_LIMIT;
+        if (atErrorLimit) consecutiveErrors.length = 0;
+
         logger.info('process unsuccessful; trying again after waiting period');
-        setTimeout(() => monitorOffice(office), 5000);
+
+        setTimeout(() => monitorOffice(office), atErrorLimit ? 60000 : 5000);
       }
     }
   });
