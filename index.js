@@ -33,29 +33,25 @@ const months = [
 const offices = {
   LA: {
     cid: 100034,
-    name: 'LA',
+    name: 'Los Angeles',
     username: process.env.PRENOTA_LA_LOGIN,
     password: process.env.PRENOTA_LA_PW,
   },
   SF: {
     cid: 100012,
-    name: 'SF',
+    name: 'San Francisco',
     username: process.env.PRENOTA_SF_LOGIN,
     password: process.env.PRENOTA_SF_PW,
   },
 };
 
 const chromeOptions = {
-  headless: false,
+  headless: true,
   defaultViewport: null,
   slowMo: 10,
 };
 
 const getLoginPage = (cid) => `https://prenotaonline.esteri.it/login.aspx?cidsede=${cid}&returnUrl=//`;
-
-const sleep = (ms) => new Promise((resolve) => {
-  setTimeout(resolve, ms);
-});
 
 const screenshotDOMElm = async (page, selector, path) => {
   // eslint-disable-next-line no-shadow
@@ -98,8 +94,14 @@ const getCalendarDate = (calendarTitle) => {
   };
 };
 
-const getOpenDay = (page) => {
+const getOpenDayElms = async (page) => {
+  const openElms = await page.$$('.calendarCellOpen input');
+  const medElms = await page.$$('.calendarCellMed input');
+  const allElms = [...openElms, ...medElms];
 
+  console.log(allElms);
+
+  return allElms;
 };
 
 const notifyMe = (officeName, dateStr) => {
@@ -139,7 +141,7 @@ const monitorOffice = async (office) => {
   let success = false;
 
   puppeteer.launch(chromeOptions).then(async (browser) => {
-    console.log(`launching monitor process at ${new Date().toISOString()}} for ${office.cid}`);
+    console.log(`launching monitor process at ${new Date().toISOString()} for ${office.name}`);
 
     try {
       const page = await browser.newPage();
@@ -149,13 +151,14 @@ const monitorOffice = async (office) => {
 
       await page.goto(getLoginPage(office.cid));
       await page.click('#BtnLogin');
-      await sleep(1500);
+      await page.waitFor(1000);
 
-      console.log('login page');
+
+      console.log('at login page');
 
       await screenshotDOMElm(page, '#captchaLogin', CAPTCHA_PATH);
 
-      console.log('captcha screenshotted');
+      console.log('captcha screencapped');
 
       const base64 = await convertCaptchaToBase64();
 
@@ -172,83 +175,99 @@ const monitorOffice = async (office) => {
 
       await page.waitForSelector('#loginCaptcha');
       await page.type('#loginCaptcha', captcha.text);
-
       await page.waitForSelector('#UserName');
       await page.type('#UserName', office.username);
-
       await page.waitForSelector('#Password');
       await page.type('#Password', office.password);
-
       await page.click('#BtnConfermaL');
-
-      await sleep(1000);
+      await page.waitFor(1000);
 
       console.log('logged in');
+
       await page.screenshot({ path: './output/Reservation.png', fullPage: true });
       await page.click('#ctl00_repFunzioni_ctl00_btnMenuItem');
-      await sleep(1000);
+      await page.waitFor(1000);
 
       console.log('at citizenship page');
+
       await page.screenshot({ path: './output/Citizenship.png', fullPage: true });
       await page.click('#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio');
       await page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua');
-      await sleep(1000);
+      await page.waitFor(1000);
 
       console.log('at calendar page');
       await page.screenshot({ path: './output/Calendar.png', fullPage: true });
 
-      const d = new Date();
-
-      const calendarHeaderElm = await page.$('.calTitolo');
-      const calendarTitle = calendarHeaderElm.children[1].children[0].textContent;
-      console.log(`calendar title: ${calendarTitle}`);
-
+      const span = await page.$$('tr.calTitolo span');
+      const calendarTitle = await page.evaluate((e) => e.textContent, span[0]);
       const { month, year } = getCalendarDate(calendarTitle);
-      const numMonthsAheadOfCurrent = month >= d.getMonth()
-        ? ((year - d.year()) * 12) + month - d.getMonth()
-        : (Math.ceil(0, year - 1 - d.year()) * 12) + (11 - d.getMonth()) + month;
 
-      console.log(`booking is ${numMonthsAheadOfCurrent} months ahead`);
+      console.log(`start date: ${month + 1}/${year}`);
+
+      const d = moment();
+      const numMonthsAheadOfCurrent = month >= d.month()
+        ? ((year - d.year()) * 12) + month - d.month()
+        : (Math.ceil(0, year - 1 - d.year()) * 12) + (11 - d.month()) + month;
 
       // open prev months in new tabs, until we reach current month
       for (let i = 0; i < numMonthsAheadOfCurrent; i += 1) {
         const newPagePromise = new Promise((x) => browser.once('targetcreated', (target) => x(target.page())));
-        const prevButton = await page.$('[value="<"]');
-        await prevButton.click({ button: 'middle' }); // new tab
+        const prevButton = await page.$$('[value="<"]');
+        await prevButton[0].click({ button: 'middle' }); // new tab
         const newPage = await newPagePromise;
+
+        await newPage.screenshot({ path: `./output/tab_${i}.png`, fullPage: true });
 
         if (isSessionTimeout(newPage)) throw new Error(`session timeout at ${new Date().toISOString()}`);
 
         tabs.push(newPage);
+
+        d.subtract('months', 1);
+        console.log(`tab opened for ${d.format('MMMM YYYY')}`);
       }
 
       console.log('tabs created');
 
-      // monitor each tab for DOM mutations periodically
-      tabs.forEach((t, i) => {
+      // monitor each tab for open slots
+      tabs.forEach(async (tab, i) => {
+        const openDayElms = [];
+
         while (!success) {
-          const openDay = getOpenDay();
-          if (openDay) {
+          openDayElms.push(...getOpenDayElms(tab));
+
+          if (openDayElms.length) {
             const m = moment();
             m.subtract('months', i);
-            m.set('day', openDay);
 
-            const dateStr = m.format('MMMM Do YYYY');
+            const dateStr = m.format('MMMM YYYY');
 
-            const foundStatement = `open slot found in ${office.name} on ${dateStr}`;
+            const foundStatement = `open slot found in ${office.name}, ${dateStr}`;
             console.log(foundStatement);
 
             notifyMe(office.name, dateStr);
 
             success = true;
+          } else {
+            await tab.waitFor(REFRESH_PERIOD);
+            await tab.reload({ waitUntil: ['networkidle0', 'domcontentloaded'] }); // refresh
           }
         }
+
+        // try to capture html after clicking open day
+        await openDayElms[0].click();
+        await tab.waitFor(1500);
+        const html = await tab.content();
+        fs.writeFileSync('./output/open-day.html', html);
       });
     } catch (err) {
       console.log(err);
     } finally {
       await browser.close();
-      // monitorOffice(office);
+      if (!success) {
+        console.log('process failed; trying again after waiting period');
+        setTimeout(() => {}, REFRESH_PERIOD);
+        monitorOffice(office);
+      }
     }
   });
 };
