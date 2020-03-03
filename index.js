@@ -1,3 +1,4 @@
+/* eslint-disable no-shadow */
 /* eslint-disable no-await-in-loop */
 /* eslint-disable no-undef */
 
@@ -48,7 +49,7 @@ const offices = {
 };
 
 const chromeOptions = {
-  headless: false,
+  headless: true,
   defaultViewport: null,
   slowMo: 10,
 };
@@ -56,9 +57,7 @@ const chromeOptions = {
 const getLoginPage = (cid) => `https://prenotaonline.esteri.it/login.aspx?cidsede=${cid}&returnUrl=//`;
 
 const screenshotDOMElm = async (page, selector, path) => {
-  // eslint-disable-next-line no-shadow
   const rect = await page.evaluate((selector) => {
-    // eslint-disable-next-line no-undef
     const element = document.querySelector(selector);
     const {
       x, y, width, height,
@@ -226,8 +225,15 @@ const monitorOffice = async (office) => {
       for (let i = 0; i < numMonthsAheadOfCurrent; i += 1) {
         const currentTab = tabs.slice(-1)[0];
 
-        const newPagePromise = new Promise((resolve) => browser.once('targetcreated',
-          (target) => resolve(target.page())));
+        const newPagePromise = new Promise((resolve, reject) => {
+          const tId = setTimeout(() => reject(new Error('timeout on new calendar tab')), REFRESH_PERIOD);
+
+          browser.once('targetcreated', (target) => {
+            clearTimeout(tId);
+            resolve(target.page());
+          });
+        });
+
         const prevButton = await currentTab.$$('[value="<"]');
 
         // open in new tab
@@ -242,7 +248,7 @@ const monitorOffice = async (office) => {
 
         await newPage.screenshot({ path: `./output/${pid}_${d.format('MMMM')}_${d.format('YYYY')}.png`, fullPage: true });
 
-        await checkForSessionTimeout();
+        await checkForSessionTimeout(newPage);
 
         tabs.push(newPage);
       }
@@ -271,16 +277,17 @@ const monitorOffice = async (office) => {
           } else {
             await tab.waitFor(REFRESH_PERIOD);
             await tab.reload({ waitUntil: ['networkidle0', 'domcontentloaded'] }); // refresh
-            await checkForSessionTimeout();
+            await checkForSessionTimeout(tab);
           }
         }
 
-        // try to capture html after clicking open day
+        // try to capture page after clicking open day
         await openDayElms[0].click();
         await tab.waitFor(1500);
-        await checkForSessionTimeout();
+        await checkForSessionTimeout(tab);
         const html = await tab.content();
         fs.writeFileSync('./output/open-day.html', html);
+        tab.screenshot({ path: `./output/${pid}_after_date_click.png`, fullPage: true });
       });
     } catch (err) {
       logger.log('error', err);
