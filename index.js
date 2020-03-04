@@ -87,12 +87,12 @@ const convertCaptchaToBase64 = (path) => new Promise((resolve, reject) => {
   });
 });
 
-const solveCaptcha = async (page, elmId, path) => {
+const solveCaptcha = async (page, logger, elmId, path) => {
   await screenshotDOMElm(page, elmId, path);
 
   logger.info('captcha at login screencapped');
 
-  const base64 = await convertCaptchaToBase64();
+  const base64 = await convertCaptchaToBase64(path);
 
   logger.info('captcha converted to base64');
 
@@ -104,12 +104,6 @@ const solveCaptcha = async (page, elmId, path) => {
   return captcha.text;
 };
 
-const checkForSessionTimeout = async (page) => {
-  if (await page.evaluate(() => window.find('Session timeout'))) {
-    throw new Error(`session timeout at ${new Date().toISOString()}`);
-  }
-};
-
 const getCalendarDate = (calendarTitle) => {
   const match = calendarTitle.match(/(\w+), (\d+)/);
   return {
@@ -118,19 +112,7 @@ const getCalendarDate = (calendarTitle) => {
   };
 };
 
-const getOpenDayElms = async (page) => {
-  const openElms = await page.$$('.calendarCellOpen input');
-  const medElms = await page.$$('.calendarCellMed input');
-  const allElms = [...openElms, ...medElms];
-
-  logger.info(allElms);
-
-  return allElms;
-};
-
-const notifyMeOnSuccess = (officeName, dateStr) => {
-  const text = `PRENOTA APPOINTMENT FOUND IN ${officeName} on ${dateStr}`;
-
+const notifyMe = (logger, text) => {
   const transport = nodemailer.createTransport({
     service: 'gmail',
     host: 'smtp.gmail.com',
@@ -161,13 +143,22 @@ const notifyMeOnSuccess = (officeName, dateStr) => {
   });
 };
 
-// Track consecutive errors so we don't waste cycles
-const consecutiveErrors = [];
+const notifyMeOnSlotFound = (logger, officeName, dateStr) => {
+  const text = `PRENOTA APPOINTMENT FOUND IN ${officeName} IN ${dateStr}`;
+  notifyMe(logger, text);
+};
+
+const notifyMeOnConfirmation = (logger, officeName, dateStr) => {
+  const text = `PRENOTA APPOINTMENT BOOKED IN ${officeName} IN ${dateStr}`;
+  notifyMe(logger, text);
+};
 
 const monitorOffice = async (office) => {
   let success = false;
 
+  const consecutiveErrors = []; // track consecutive errors so we don't waste cycles
   const pid = shortid();
+
   const logger = winston.createLogger({
     format: winston.format.printf((info) => `[${pid}] ${info.message}`),
     transports: [
@@ -192,28 +183,43 @@ const monitorOffice = async (office) => {
 
       logger.info('at login page');
 
-      const captchaText = await solveCaptcha(page, '#captchaLogin', CAPTCHA_LOGIN_PATH);
+      let loginCaptchaSuccess = false;
+      while (!loginCaptchaSuccess) {
+        const loginCaptchaText = await solveCaptcha(
+          page,
+          logger,
+          '#captchaLogin',
+          CAPTCHA_LOGIN_PATH,
+        );
 
-      logger.info(`captcha solved: ${captchaText}`);
+        logger.info(`captcha solved: ${loginCaptchaText}`);
 
-      await page.waitForSelector('#loginCaptcha');
-      await page.type('#loginCaptcha', captchaText);
-      await page.waitForSelector('#UserName');
-      await page.type('#UserName', office.username);
-      await page.waitForSelector('#Password');
-      await page.type('#Password', office.password);
+        await page.waitForSelector('#loginCaptcha');
+        await page.type('#loginCaptcha', loginCaptchaText);
+        await page.waitForSelector('#UserName');
+        await page.type('#UserName', office.username);
+        await page.waitForSelector('#Password');
+        await page.type('#Password', office.password);
 
-      await Promise.all([
-        page.click('#BtnConfermaL'),
-        page.waitForNavigation({ waitUntil: 'networkidle2' }),
-      ]);
+        await Promise.all([
+          page.click('#BtnConfermaL'),
+          page.waitForNavigation({ waitUntil: 'networkidle2' }),
+        ]);
 
-      logger.info('clicked login');
+        logger.info('clicked login');
 
-      await Promise.all([
-        page.click('#ctl00_repFunzioni_ctl00_btnMenuItem'),
-        page.waitForNavigation({ waitUntil: 'networkidle2' }),
-      ]);
+        try {
+          await Promise.all([
+            page.click('#ctl00_repFunzioni_ctl00_btnMenuItem'),
+            page.waitForNavigation({ waitUntil: 'networkidle2' }),
+          ]);
+
+          loginCaptchaSuccess = true;
+        } catch (error) {
+          logger.info('login captcha failed. trying again');
+          page.waitFor(1000);
+        }
+      }
 
       logger.info('at citizenship page');
 
@@ -232,9 +238,13 @@ const monitorOffice = async (office) => {
       // if slot is open, calendar will start at the corresponding month
       // so we can just nav back and forth to calendar until we find a slot
       while (!success) {
-        const openDayElms = getOpenDayElms(page);
+        const openElms = await page.$$('.calendarCellOpen input');
+        const medElms = await page.$$('.calendarCellMed input');
+        const openDayElms = openElms.concat(medElms);
 
         if (openDayElms.length) {
+          await page.screenshot({ path: `./output/${pid}_slot.png` });
+
           const spans = await page.$$('tr.calTitolo span');
           const calendarTitle = await page.evaluate((e) => e.textContent, spans[0]);
           const { month, year } = getCalendarDate(calendarTitle);
@@ -245,6 +255,7 @@ const monitorOffice = async (office) => {
 
           const dateStr = m.format('MMMM YYYY');
           logger.info(`found open day at ${dateStr}`);
+          notifyMeOnSlotFound(logger, office.name, dateStr);
 
           await Promise.all([
             openDayElms[0].click(),
@@ -259,37 +270,52 @@ const monitorOffice = async (office) => {
 
           logger.info('at final captcha screen');
 
-          const confirmCaptchaText = await solveCaptcha(
-            page,
-            'ctl00_ContentPlaceHolder1_confCaptcha',
-            CAPTCHA_CONFIRM_PATH,
-          );
+          let confirmCaptchaSuccess = false;
+          while (!confirmCaptchaSuccess) {
+            const confirmCaptchaText = await solveCaptcha(
+              page,
+              logger,
+              '#ctl00_ContentPlaceHolder1_confCaptcha',
+              CAPTCHA_CONFIRM_PATH,
+            );
 
-          await page.waitForSelector('#ctl00_ContentPlaceHolder1_captchaConf');
-          await page.type('#ctl00_ContentPlaceHolder1_captchaConf', confirmCaptchaText);
+            await page.waitForSelector('#ctl00_ContentPlaceHolder1_captchaConf');
+            await page.type('#ctl00_ContentPlaceHolder1_captchaConf', confirmCaptchaText);
 
-          await Promise.all([
-            page.click('ctl00_ContentPlaceHolder1_btnFinalConf'),
-            page.waitForNavigation({ waitUntil: 'networkidle2' }),
-          ]);
+            // click confirm appt
+            await Promise.all([
+              page.click('#ctl00_ContentPlaceHolder1_btnFinalConf'),
+              page.waitForNavigation({ waitUntil: 'networkidle2' }),
+            ]);
 
-          await checkForSessionTimeout(page);
+            try {
+              // if captcha element remains, we must have entered wrong solution
+              await page.waitForSelector('#ctl00_ContentPlaceHolder1_captchaConf', { timeout: 2000 });
+            } catch (error) {
+              // no captcha element found; must be on next screen
+              confirmCaptchaSuccess = true;
+            }
+          }
 
+          await page.screenshot({ path: `./output/${pid}_confirmed.png` });
+          notifyMeOnConfirmation(logger, office.name, dateStr);
           success = true;
         } else {
           await Promise.all([
             page.click('#ctl00_ContentPlaceHolder1_lnkBack'),
             page.waitForNavigation({ waitUntil: 'networkidle2' }),
           ]);
-          await checkForSessionTimeout(page);
+
           logger.info('back at citizenship page');
+
           await page.waitFor(REFRESH_PERIOD);
+
           await Promise.all([
             page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua'),
             page.waitForNavigation({ waitUntil: 'networkidle2' }),
           ]);
+
           logger.info('back at calendar page');
-          await checkForSessionTimeout(page);
         }
       }
     } catch (err) {
@@ -298,9 +324,7 @@ const monitorOffice = async (office) => {
     } finally {
       await browser.close();
 
-      if (success) {
-        notifyMeOnSuccess(office, dateStr);
-      } else {
+      if (!success) {
         const atErrorLimit = consecutiveErrors.length >= CONSECUTIVE_ERROR_LIMIT;
         if (atErrorLimit) consecutiveErrors.length = 0;
 
