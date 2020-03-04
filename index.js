@@ -8,7 +8,7 @@ const base64Img = require('base64-img');
 const captchaSolver = require('2captcha-node');
 const moment = require('moment');
 const nodemailer = require('nodemailer');
-const xoauth2 = require('xoauth2');
+const { google } = require('googleapis');
 const shortid = require('shortid');
 const winston = require('winston');
 
@@ -22,7 +22,18 @@ const SLEEP_CALENDAR_PERIOD = 60000;
 const CONSECUTIVE_ERROR_LIMIT = 8;
 const MINIMUM_ACCEPTABLE_DATE = moment('04/04/2022', 'DD/MM/YYYY');
 
+const { OAuth2 } = google.auth;
 const solver = captchaSolver.default(process.env.KEY);
+
+const oAuth2Client = new OAuth2(
+  process.env.OAUTH_ID,
+  process.env.OAUTH_SECRET,
+  process.env.OAUTH_REDIRECT,
+);
+
+oAuth2Client.setCredentials({
+  refresh_token: process.env.OAUTH_REFRESH,
+});
 
 const months = [
   'gennaio',
@@ -116,24 +127,26 @@ const getCalendarDate = (calendarTitle) => {
   };
 };
 
-const notifyMe = (logger, text) => {
+const notifyMeOnConfirmation = (logger, officeName, dateStr) => {
+  const text = `PRENOTA APPOINTMENT BOOKED IN ${officeName} ON ${dateStr}`;
+
+  const accessToken = oAuth2Client.getAccessToken();
+
   const transport = nodemailer.createTransport({
-    service: 'gmail',
-    host: 'smtp.gmail.com',
-    secure: 'true',
-    port: '465',
+    service: process.env.SMTP_SERVICE,
     auth: {
-      type: 'OAuth2', // Authentication type
-      user: 'your_email@service.com', // For example, xyz@gmail.com
-      clientId: 'Your_ClientID',
-      clientSecret: 'Client_Secret',
-      refreshToken: 'Refresh_Token',
+      type: 'OAuth2',
+      user: process.env.SMTP_USER,
+      clientId: process.env.OAUTH_ID,
+      clientSecret: process.env.OAUTH_SECRET,
+      refreshToken: process.env.OAUTH_REFRESH,
+      accessToken,
     },
   });
 
   const message = {
-    from: 'elonmusk@tesla.com', // Sender address
-    to: 'to@email.com', // List of recipients
+    from: process.env.SMTP_USER,
+    to: process.env.SMTP_TO,
     subject: text,
     text,
   };
@@ -145,16 +158,6 @@ const notifyMe = (logger, text) => {
       logger.info(info);
     }
   });
-};
-
-const notifyMeOnSlotFound = (logger, officeName, dateStr) => {
-  const text = `PRENOTA APPOINTMENT FOUND IN ${officeName} ON ${dateStr}`;
-  notifyMe(logger, text);
-};
-
-const notifyMeOnConfirmation = (logger, officeName, dateStr) => {
-  const text = `PRENOTA APPOINTMENT BOOKED IN ${officeName} ON ${dateStr}`;
-  notifyMe(logger, text);
 };
 
 const monitorOffice = async (office) => {
@@ -264,10 +267,11 @@ const monitorOffice = async (office) => {
 
           const dateStr = m.format('MMMM DD, YYYY');
           logger.info(`found open day at ${dateStr}`);
-          notifyMeOnSlotFound(logger, office.name, dateStr);
 
           // open slot is too far in advance. wait for five minutes before rechecking server
           if (m >= MINIMUM_ACCEPTABLE_DATE) {
+            notifyMeOnConfirmation(logger, office.name, dateStr);
+
             logger.info('slot is too far away. trying again after sleep');
             sleepForCalendarChange = true;
           }
