@@ -1,3 +1,4 @@
+/* eslint-disable no-nested-ternary */
 /* eslint-disable no-shadow */
 /* eslint-disable no-await-in-loop */
 /* eslint-disable no-undef */
@@ -16,7 +17,10 @@ require('dotenv').config();
 const CAPTCHA_LOGIN_PATH = './output/captcha_login.jpeg';
 const CAPTCHA_CONFIRM_PATH = './output/captcha_confirm.jpeg';
 const REFRESH_PERIOD = 20000;
+const SLEEP_ERR_PERIOD = 60000 * 5;
+const SLEEP_CALENDAR_PERIOD = 60000;
 const CONSECUTIVE_ERROR_LIMIT = 8;
+const MINIMUM_ACCEPTABLE_DATE = moment('04/04/2022', 'DD/MM/YYYY');
 
 const solver = captchaSolver.default(process.env.KEY);
 
@@ -144,17 +148,18 @@ const notifyMe = (logger, text) => {
 };
 
 const notifyMeOnSlotFound = (logger, officeName, dateStr) => {
-  const text = `PRENOTA APPOINTMENT FOUND IN ${officeName} IN ${dateStr}`;
+  const text = `PRENOTA APPOINTMENT FOUND IN ${officeName} ON ${dateStr}`;
   notifyMe(logger, text);
 };
 
 const notifyMeOnConfirmation = (logger, officeName, dateStr) => {
-  const text = `PRENOTA APPOINTMENT BOOKED IN ${officeName} IN ${dateStr}`;
+  const text = `PRENOTA APPOINTMENT BOOKED IN ${officeName} ON ${dateStr}`;
   notifyMe(logger, text);
 };
 
 const monitorOffice = async (office) => {
   let success = false;
+  let sleepForCalendarChange = false;
 
   const consecutiveErrors = []; // track consecutive errors so we don't waste cycles
   const pid = shortid();
@@ -237,28 +242,38 @@ const monitorOffice = async (office) => {
 
       // if slot is open, calendar will start at the corresponding month
       // so we can just nav back and forth to calendar until we find a slot
-      while (!success) {
+      while (!success && !sleepForCalendarChange) {
         const openElms = await page.$$('.calendarCellOpen input');
         const medElms = await page.$$('.calendarCellMed input');
         const openDayElms = openElms.concat(medElms);
 
         if (openDayElms.length) {
+          const openDayElm = openDayElms[0];
+
           await page.screenshot({ path: `./output/${pid}_slot.png` });
 
           const spans = await page.$$('tr.calTitolo span');
           const calendarTitle = await page.evaluate((e) => e.textContent, spans[0]);
           const { month, year } = getCalendarDate(calendarTitle);
+          const day = await page.evaluate((e) => e.getAttribute('value'), openDayElm);
 
           const m = moment();
+          m.set('day', parseInt(day, 10));
           m.set('month', month);
           m.set('year', year);
 
-          const dateStr = m.format('MMMM YYYY');
+          const dateStr = m.format('MMMM DD, YYYY');
           logger.info(`found open day at ${dateStr}`);
           notifyMeOnSlotFound(logger, office.name, dateStr);
 
+          // open slot is too far in advance. wait for five minutes before rechecking server
+          if (m >= MINIMUM_ACCEPTABLE_DATE) {
+            logger.info('slot is too far away. trying again after sleep');
+            sleepForCalendarChange = true;
+          }
+
           await Promise.all([
-            openDayElms[0].click(),
+            openDayElm.click(),
             page.waitForNavigation({ waitUntil: 'networkidle2' }),
           ]);
 
@@ -281,6 +296,7 @@ const monitorOffice = async (office) => {
 
             await page.waitForSelector('#ctl00_ContentPlaceHolder1_captchaConf');
             await page.type('#ctl00_ContentPlaceHolder1_captchaConf', confirmCaptchaText);
+            await page.screenshot({ path: `./output/${pid}_confirm_captcha.png` });
 
             // click confirm appt
             await Promise.all([
@@ -326,11 +342,17 @@ const monitorOffice = async (office) => {
 
       if (!success) {
         const atErrorLimit = consecutiveErrors.length >= CONSECUTIVE_ERROR_LIMIT;
-        if (atErrorLimit) consecutiveErrors.length = 0;
+        if (atErrorLimit) {
+          consecutiveErrors.length = 0;
+          logger.info('error limit reached');
+        }
 
         logger.info('process unsuccessful; trying again after waiting period');
 
-        setTimeout(() => monitorOffice(office), atErrorLimit ? 60000 : 5000);
+        const period = atErrorLimit ? SLEEP_ERR_PERIOD
+          : sleepForCalendarChange ? SLEEP_CALENDAR_PERIOD : 5000;
+
+        setTimeout(() => monitorOffice(office), period);
       }
     }
   });
