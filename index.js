@@ -10,7 +10,6 @@ const base64Img = require('base64-img');
 const captchaSolver = require('2captcha-node');
 const moment = require('moment');
 const nodemailer = require('nodemailer');
-const { google } = require('googleapis');
 const shortid = require('shortid');
 const winston = require('winston');
 
@@ -24,18 +23,7 @@ const SLEEP_CALENDAR_PERIOD = 60000;
 const CONSECUTIVE_ERROR_LIMIT = 8;
 const MINIMUM_ACCEPTABLE_DATE = moment('04/04/2022', 'DD/MM/YYYY');
 
-const { OAuth2 } = google.auth;
 const solver = captchaSolver.default(process.env.KEY);
-
-const oAuth2Client = new OAuth2(
-  process.env.OAUTH_ID,
-  process.env.OAUTH_SECRET,
-  process.env.OAUTH_REDIRECT,
-);
-
-oAuth2Client.setCredentials({
-  refresh_token: process.env.OAUTH_REFRESH,
-});
 
 const months = [
   'gennaio',
@@ -142,8 +130,6 @@ const getCalendarDate = (calendarTitle) => {
 const notifyMeOnConfirmation = (logger, officeName, dateStr) => {
   const text = `PRENOTA APPOINTMENT BOOKED IN ${officeName} ON ${dateStr}`;
 
-  // const accessToken = oAuth2Client.getAccessToken();
-
   const transport = nodemailer.createTransport({
     service: process.env.SMTP_SERVICE,
     auth: {
@@ -199,6 +185,9 @@ const monitorOffice = async (office) => {
 
       logger.info('at login page');
 
+      await page.waitForSelector('#UserName');
+      await page.type('#UserName', office.username);
+
       let loginCaptchaSuccess = false;
       while (!loginCaptchaSuccess) {
         const loginCaptchaText = await solveCaptcha(
@@ -212,8 +201,6 @@ const monitorOffice = async (office) => {
 
         await page.waitForSelector('#loginCaptcha');
         await page.type('#loginCaptcha', loginCaptchaText);
-        await page.waitForSelector('#UserName');
-        await page.type('#UserName', office.username);
         await page.waitForSelector('#Password');
         await page.type('#Password', office.password);
 
@@ -261,8 +248,6 @@ const monitorOffice = async (office) => {
         await page.keyboard.type(office.citizenship.guidelines);
       }
 
-      await page.screenshot('./output/sf_citizenship.png');
-
       await Promise.all([
         page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua'),
         page.waitForNavigation({ waitUntil: 'networkidle2' }),
@@ -279,8 +264,6 @@ const monitorOffice = async (office) => {
 
         if (openDayElms.length) {
           const openDayElm = openDayElms[0];
-
-          await page.screenshot({ path: `./output/${pid}_slot.png` });
 
           const spans = await page.$$('tr.calTitolo span');
           const calendarTitle = await page.evaluate((e) => e.textContent, spans[0]);
@@ -328,7 +311,6 @@ const monitorOffice = async (office) => {
 
             await page.waitForSelector('#ctl00_ContentPlaceHolder1_captchaConf');
             await page.type('#ctl00_ContentPlaceHolder1_captchaConf', confirmCaptchaText);
-            await page.screenshot({ path: `./output/${pid}_confirm_captcha.png` });
 
             // click confirm appt
             await Promise.all([
@@ -390,4 +372,14 @@ const monitorOffice = async (office) => {
   });
 };
 
-monitorOffice(offices.SF);
+// monitorOffice(offices.SF);
+
+const pid = shortid();
+
+const logger = winston.createLogger({
+  format: winston.format.printf((info) => `[${pid}] ${info.message}`),
+  transports: [
+    new winston.transports.Console(),
+  ],
+});
+notifyMeOnConfirmation(logger, 'test', 'Jan 1 2001');
