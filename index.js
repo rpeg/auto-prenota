@@ -372,14 +372,4 @@ const monitorOffice = async (office) => {
   });
 };
 
-// monitorOffice(offices.SF);
-
-const pid = shortid();
-
-const logger = winston.createLogger({
-  format: winston.format.printf((info) => `[${pid}] ${info.message}`),
-  transports: [
-    new winston.transports.Console(),
-  ],
-});
-notifyMeOnConfirmation(logger, 'test', 'Jan 1 2001');
+monitorOffice(offices.SF);
