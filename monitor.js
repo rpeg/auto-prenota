@@ -1,11 +1,11 @@
-/* eslint-disable no-param-reassign */
-/* eslint-disable no-return-assign */
-/* eslint-disable no-nested-ternary */
 /* eslint-disable no-shadow */
+/* eslint-disable no-nested-ternary */
+/* eslint-disable no-loop-func */
 /* eslint-disable no-await-in-loop */
 /* eslint-disable no-undef */
 
 const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const base64Img = require('base64-img');
 const captchaSolver = require('2captcha-node');
 const moment = require('moment');
@@ -15,8 +15,10 @@ const winston = require('winston');
 const { notifyMeOnConfirmation, notifyMeOnSlotFound } = require('./smtp');
 require('dotenv').config();
 
-const CAPTCHA_LOGIN_PATH = './output/captcha_login.jpeg';
-const CAPTCHA_CONFIRM_PATH = './output/captcha_confirm.jpeg';
+puppeteer.use(StealthPlugin());
+
+const CAPTCHA_LOGIN_PATH = './tmp/captcha_login.jpeg';
+const CAPTCHA_CONFIRM_PATH = './tmp/captcha_confirm.jpeg';
 const REFRESH_PERIOD = 10000;
 const SLEEP_ERR_PERIOD = 60000;
 const SLEEP_CALENDAR_PERIOD = 30000;
@@ -69,6 +71,7 @@ const chromeOptions = {
   headless: true,
   defaultViewport: null,
   slowMo: 10,
+  args: ['--no-sandbox', '--disable-setuid-sandbox'],
 };
 
 const getLoginPage = (cid) => `https://prenotaonline.esteri.it/login.aspx?cidsede=${cid}&returnUrl=//`;
@@ -126,7 +129,6 @@ const getCalendarDate = (calendarTitle) => {
     year: parseInt(match[2], 10),
   };
 };
-
 
 const monitorOffice = async (office) => {
   let success = false;
@@ -194,7 +196,7 @@ const monitorOffice = async (office) => {
           loginCaptchaSuccess = true;
         } catch (error) {
           logger.info('login captcha failed. trying again');
-          page.waitFor(1000);
+          page.waitFor(5000);
         }
       }
 
@@ -301,7 +303,7 @@ const monitorOffice = async (office) => {
             }
           }
 
-          await page.screenshot({ path: `./output/${pid}_confirmed.png` });
+          await page.screenshot({ path: `./tmp/${pid}_confirmed.png` });
           notifyMeOnConfirmation(office.name, dateStr);
           success = true;
         } else {
@@ -338,7 +340,7 @@ const monitorOffice = async (office) => {
         logger.info('process unsuccessful; trying again after waiting period');
 
         const period = atErrorLimit ? SLEEP_ERR_PERIOD
-          : sleepForCalendarChange ? SLEEP_CALENDAR_PERIOD : 5000;
+          : sleepForCalendarChange ? SLEEP_CALENDAR_PERIOD : REFRESH_PERIOD;
 
         setTimeout(() => monitorOffice(office), period);
       }
