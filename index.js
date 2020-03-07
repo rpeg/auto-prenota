@@ -56,12 +56,22 @@ const offices = {
     name: 'LA',
     username: process.env.PRENOTA_LA_LOGIN,
     password: process.env.PRENOTA_LA_PW,
+    citizenshipElmId: '#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio',
   },
   SF: {
     cid: 100012,
     name: 'SF',
     username: process.env.PRENOTA_SF_LOGIN,
     password: process.env.PRENOTA_SF_PW,
+    citizenshipElmId: '#ctl00_ContentPlaceHolder1_rpServizi_ctl02_btnNomeServizio',
+    citizenship: {
+      passport: '284036786',
+      marital: 'single',
+      citizenship: 'US',
+      address: '820 Larkin St, San Francisco, CA 94109',
+      profession: 'accountant',
+      guidelines: 'Yes',
+    },
   },
 };
 
@@ -130,17 +140,13 @@ const getCalendarDate = (calendarTitle) => {
 const notifyMeOnConfirmation = (logger, officeName, dateStr) => {
   const text = `PRENOTA APPOINTMENT BOOKED IN ${officeName} ON ${dateStr}`;
 
-  const accessToken = oAuth2Client.getAccessToken();
+  // const accessToken = oAuth2Client.getAccessToken();
 
   const transport = nodemailer.createTransport({
     service: process.env.SMTP_SERVICE,
     auth: {
-      type: 'OAuth2',
       user: process.env.SMTP_USER,
-      clientId: process.env.OAUTH_ID,
-      clientSecret: process.env.OAUTH_SECRET,
-      refreshToken: process.env.OAUTH_REFRESH,
-      accessToken,
+      pass: process.env.SMTP_PW,
     },
   });
 
@@ -232,9 +238,23 @@ const monitorOffice = async (office) => {
       logger.info('at citizenship page');
 
       await Promise.all([
-        page.click('#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio'),
+        page.click(office.citizenshipElmId),
         page.waitForNavigation({ waitUntil: 'networkidle2' }),
       ]);
+
+      // fill out citizenship info (only req. for some offices e.g. SF)
+      if (office.citizenship) {
+        const controlId = 'ctl00_ContentPlaceHolder1_acc_datiAddizionali1_mycontrol';
+
+        await Promise.all([
+          page.type(`${controlId}1`, office.citizenship.passport),
+          page.select(`${controlId}2`, office.citizenship.marital),
+          page.type(`${controlId}3`, office.citizenship.citizenshipElmId),
+          page.type(`${controlId}4`, office.citizenship.address),
+          page.type(`${controlId}5`, office.citizenship.profession),
+          page.type(`${controlId}6`, office.citizenship.guidelines),
+        ]);
+      }
 
       await Promise.all([
         page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua'),
@@ -274,6 +294,7 @@ const monitorOffice = async (office) => {
 
             logger.info('slot is too far away. trying again after sleep');
             sleepForCalendarChange = true;
+            return;
           }
 
           await Promise.all([
@@ -362,4 +383,4 @@ const monitorOffice = async (office) => {
   });
 };
 
-monitorOffice(offices.LA);
+monitorOffice(offices.SF);
