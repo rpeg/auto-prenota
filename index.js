@@ -1,3 +1,5 @@
+/* eslint-disable no-param-reassign */
+/* eslint-disable no-return-assign */
 /* eslint-disable no-nested-ternary */
 /* eslint-disable no-shadow */
 /* eslint-disable no-await-in-loop */
@@ -76,7 +78,7 @@ const offices = {
 };
 
 const chromeOptions = {
-  headless: true,
+  headless: false,
   defaultViewport: null,
   slowMo: 10,
 };
@@ -244,17 +246,22 @@ const monitorOffice = async (office) => {
 
       // fill out citizenship info (only req. for some offices e.g. SF)
       if (office.citizenship) {
-        const controlId = 'ctl00_ContentPlaceHolder1_acc_datiAddizionali1_mycontrol';
+        const controlId = '#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_mycontrol';
 
-        await Promise.all([
-          page.type(`${controlId}1`, office.citizenship.passport),
-          page.select(`${controlId}2`, office.citizenship.marital),
-          page.type(`${controlId}3`, office.citizenship.citizenshipElmId),
-          page.type(`${controlId}4`, office.citizenship.address),
-          page.type(`${controlId}5`, office.citizenship.profession),
-          page.type(`${controlId}6`, office.citizenship.guidelines),
-        ]);
+        await page.click(`${controlId}1`);
+        await page.keyboard.type(office.citizenship.passport);
+        await page.select(`${controlId}2`, office.citizenship.marital);
+        await page.click(`${controlId}3`);
+        await page.keyboard.type(office.citizenship.citizenship);
+        await page.click(`${controlId}4`);
+        await page.keyboard.type(office.citizenship.address);
+        await page.click(`${controlId}5`);
+        await page.keyboard.type(office.citizenship.profession);
+        await page.click(`${controlId}6`);
+        await page.keyboard.type(office.citizenship.guidelines);
       }
+
+      await page.screenshot('./output/sf_citizenship.png');
 
       await Promise.all([
         page.click('#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_btnContinua'),
