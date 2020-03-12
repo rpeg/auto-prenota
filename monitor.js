@@ -1,18 +1,20 @@
-/* eslint-disable no-shadow */
 /* eslint-disable no-nested-ternary */
 /* eslint-disable no-loop-func */
 /* eslint-disable no-await-in-loop */
-/* eslint-disable no-undef */
-
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const base64Img = require('base64-img');
-const captchaSolver = require('2captcha-node');
+const faker = require('faker');
+const _ = require('lodash');
 const moment = require('moment');
 const shortid = require('shortid');
 const winston = require('winston');
 
-const { notifyMeOnConfirmation, notifyMeOnSlotFound } = require('./smtp');
+const CaptchaSolver = require('./CaptchaSolver');
+const AccountManager = require('./AccountManager');
+const SmtpClient = require('./SmtpClient');
+
+const { getLoginPage, getRandomProfession, chromeOptions } = require('./utils');
+
 require('dotenv').config();
 
 puppeteer.use(StealthPlugin());
@@ -20,12 +22,10 @@ puppeteer.use(StealthPlugin());
 const CAPTCHA_LOGIN_PATH = './tmp/captcha_login.jpeg';
 const CAPTCHA_CONFIRM_PATH = './tmp/captcha_confirm.jpeg';
 const REFRESH_PERIOD = 10000;
-const SLEEP_ERR_PERIOD = 60000;
+const SLEEP_ERR_PERIOD = 60000 * 5;
 const SLEEP_CALENDAR_PERIOD = 30000;
 const CONSECUTIVE_ERROR_LIMIT = 8;
 const MINIMUM_ACCEPTABLE_DATE = moment('04/04/2022', 'DD/MM/YYYY');
-
-const solver = captchaSolver.default(process.env.KEY);
 
 const months = [
   'gennaio',
@@ -43,84 +43,14 @@ const months = [
 ];
 
 const offices = {
-  LA: {
-    cid: 100034,
-    name: 'LA',
-    username: process.env.PRENOTA_LA_LOGIN,
-    password: process.env.PRENOTA_LA_PW,
-    citizenshipElmId: '#ctl00_ContentPlaceHolder1_rpServizi_ctl05_btnNomeServizio',
-  },
   SF: {
     cid: 100012,
     name: 'SF',
-    username: process.env.PRENOTA_SF_LOGIN,
-    password: process.env.PRENOTA_SF_PW,
-    citizenshipElmId: '#ctl00_ContentPlaceHolder1_rpServizi_ctl02_btnNomeServizio',
-    citizenship: {
-      passport: process.env.PASSPORT,
-      marital: process.env.MARITAL,
-      citizenship: process.env.CITIZENSHIP,
-      address: process.env.ADDRESS,
-      profession: process.env.PROFESSION,
-      guidelines: 'Yes',
-    },
+    citizenship: true,
   },
 };
 
-const chromeOptions = {
-  headless: true,
-  defaultViewport: null,
-  slowMo: 10,
-  args: ['--no-sandbox', '--disable-setuid-sandbox'],
-};
-
-const getLoginPage = (cid) => `https://prenotaonline.esteri.it/login.aspx?cidsede=${cid}&returnUrl=//`;
-
-const screenshotDOMElm = async (page, selector, path) => {
-  const rect = await page.evaluate((selector) => {
-    const element = document.querySelector(selector);
-    const {
-      x, y, width, height,
-    } = element.getBoundingClientRect();
-    return {
-      left: x, top: y, width, height, id: element.id,
-    };
-  }, selector);
-
-  return page.screenshot({
-    path,
-    clip: {
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-    },
-  });
-};
-
-const convertCaptchaToBase64 = (path) => new Promise((resolve, reject) => {
-  base64Img.base64(path, (err, data) => {
-    if (err) reject(err);
-    resolve(data);
-  });
-});
-
-const solveCaptcha = async (page, logger, elmId, path) => {
-  await screenshotDOMElm(page, elmId, path);
-
-  logger.info('captcha at login screencapped');
-
-  const base64 = await convertCaptchaToBase64(path);
-
-  logger.info('captcha converted to base64');
-
-  const captcha = await solver.solve({
-    image: base64.toString(),
-    maxAttempts: 10,
-  });
-
-  return captcha.text;
-};
+const consecutiveErrors = [];
 
 const getCalendarDate = (calendarTitle) => {
   const match = calendarTitle.match(/(\w+), (\d+)/);
@@ -130,11 +60,13 @@ const getCalendarDate = (calendarTitle) => {
   };
 };
 
-const monitorOffice = async (office) => {
+const monitorOffice = async (office, createNewAccount) => {
+  let account = null;
+
   let success = false;
+  let accountBlocked = false;
   let sleepForCalendarChange = false;
 
-  const consecutiveErrors = []; // track consecutive errors so we don't waste cycles
   const pid = shortid();
 
   const logger = winston.createLogger({
@@ -144,13 +76,31 @@ const monitorOffice = async (office) => {
     ],
   });
 
+  const smtpClient = new SmtpClient(office.name);
+  const accountManager = new AccountManager(office, logger);
+
+  if (createNewAccount) {
+    try {
+      account = await accountManager.create();
+
+      if (account === {}) throw new Error('account creation failed');
+      if (!account.activated) throw new Error('account failed to activate');
+    } catch (err) {
+      consecutiveErrors.push(err);
+      logger.log('error', err);
+
+      setTimeout(() => monitorOffice(office, true), SLEEP_ERR_PERIOD);
+      return;
+    }
+  }
+
   puppeteer.launch(chromeOptions).then(async (browser) => {
+    const captchaSolver = new CaptchaSolver(logger);
+
     logger.info(`launching monitor process at ${new Date().toISOString()} for ${office.name}`);
 
     try {
       const page = await browser.newPage();
-
-      page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 2 });
 
       await page.goto(getLoginPage(office.cid));
 
@@ -166,12 +116,9 @@ const monitorOffice = async (office) => {
 
       let loginCaptchaSuccess = false;
       while (!loginCaptchaSuccess) {
-        const loginCaptchaText = await solveCaptcha(
-          page,
-          logger,
-          '#captchaLogin',
-          CAPTCHA_LOGIN_PATH,
-        );
+        captchaSolver.page = page;
+        captchaSolver.path = CAPTCHA_LOGIN_PATH;
+        const loginCaptchaText = await captchaSolver.solveCaptcha('#captchaLogin');
 
         logger.info(`captcha solved: ${loginCaptchaText}`);
 
@@ -195,15 +142,23 @@ const monitorOffice = async (office) => {
 
           loginCaptchaSuccess = true;
         } catch (error) {
-          logger.info('login captcha failed. trying again');
-          page.waitFor(5000);
+          logger.info('login captcha failed');
+
+          if ((await page.content()).match(/account is blocked/)) {
+            accountBlocked = true;
+            logger.info('account has been blocked');
+            throw new Error('blocked');
+          }
+
+          page.waitFor(1500);
         }
       }
 
       logger.info('at citizenship page');
+      const citizenshipConfirmButtons = await page.$$('[value="Confirm"]');
 
       await Promise.all([
-        page.click(office.citizenshipElmId),
+        citizenshipConfirmButtons[0].click(),
         page.waitForNavigation({ waitUntil: 'networkidle2' }),
       ]);
 
@@ -212,16 +167,16 @@ const monitorOffice = async (office) => {
         const controlId = '#ctl00_ContentPlaceHolder1_acc_datiAddizionali1_mycontrol';
 
         await page.click(`${controlId}1`);
-        await page.keyboard.type(office.citizenship.passport);
-        await page.select(`${controlId}2`, office.citizenship.marital);
+        await page.keyboard.type(_.random(100000000, 999999999));
+        await page.select(`${controlId}2`, 'single');
         await page.click(`${controlId}3`);
-        await page.keyboard.type(office.citizenship.citizenship);
+        await page.keyboard.type('US');
         await page.click(`${controlId}4`);
-        await page.keyboard.type(office.citizenship.address);
+        await page.keyboard.type(`${faker.address.streetAddress()}, ${faker.address.city()}, ${faker.address.stateAbbr()} ${faker.address.zipCode()}`);
         await page.click(`${controlId}5`);
-        await page.keyboard.type(office.citizenship.profession);
+        await page.keyboard.type(getRandomProfession());
         await page.click(`${controlId}6`);
-        await page.keyboard.type(office.citizenship.guidelines);
+        await page.keyboard.type('Yes');
       }
 
       await Promise.all([
@@ -256,7 +211,7 @@ const monitorOffice = async (office) => {
 
           // open slot is too far in advance. wait for five minutes before rechecking server
           if (m >= MINIMUM_ACCEPTABLE_DATE) {
-            notifyMeOnSlotFound(office.name, dateStr);
+            smtpClient.notifyMeOnSlotFound(dateStr);
 
             logger.info('slot is too far away. trying again after sleep');
             sleepForCalendarChange = true;
@@ -278,12 +233,9 @@ const monitorOffice = async (office) => {
 
           let confirmCaptchaSuccess = false;
           while (!confirmCaptchaSuccess) {
-            const confirmCaptchaText = await solveCaptcha(
-              page,
-              logger,
-              '#ctl00_ContentPlaceHolder1_confCaptcha',
-              CAPTCHA_CONFIRM_PATH,
-            );
+            captchaSolver.page = page;
+            captchaSolver.path = CAPTCHA_CONFIRM_PATH;
+            const confirmCaptchaText = await captchaSolver.solveCaptcha('#ctl00_ContentPlaceHolder1_confCaptcha');
 
             await page.waitForSelector('#ctl00_ContentPlaceHolder1_captchaConf');
             await page.type('#ctl00_ContentPlaceHolder1_captchaConf', confirmCaptchaText);
@@ -304,7 +256,7 @@ const monitorOffice = async (office) => {
           }
 
           await page.screenshot({ path: `./tmp/${pid}_confirmed.png` });
-          notifyMeOnConfirmation(office.name, dateStr);
+          smtpClient.notifyMeOnConfirmation(dateStr);
           success = true;
         } else {
           await Promise.all([
@@ -331,21 +283,25 @@ const monitorOffice = async (office) => {
       await browser.close();
 
       if (!success) {
-        const atErrorLimit = consecutiveErrors.length >= CONSECUTIVE_ERROR_LIMIT;
-        if (atErrorLimit) {
-          consecutiveErrors.length = 0;
-          logger.info('error limit reached');
+        if (accountBlocked) {
+          setTimeout(() => monitorOffice(office, true), SLEEP_ERR_PERIOD);
+        } else {
+          const atErrorLimit = consecutiveErrors.length >= CONSECUTIVE_ERROR_LIMIT;
+          if (consecutiveErrors.length >= CONSECUTIVE_ERROR_LIMIT) {
+            consecutiveErrors.length = 0;
+            logger.info('error limit reached');
+          }
+
+          logger.info('process unsuccessful; trying again after waiting period');
+
+          const period = atErrorLimit ? SLEEP_ERR_PERIOD
+            : sleepForCalendarChange ? SLEEP_CALENDAR_PERIOD : REFRESH_PERIOD;
+
+          setTimeout(() => monitorOffice(office, account), period);
         }
-
-        logger.info('process unsuccessful; trying again after waiting period');
-
-        const period = atErrorLimit ? SLEEP_ERR_PERIOD
-          : sleepForCalendarChange ? SLEEP_CALENDAR_PERIOD : REFRESH_PERIOD;
-
-        setTimeout(() => monitorOffice(office), period);
       }
     }
   });
 };
 
-monitorOffice(offices.SF);
+monitorOffice(offices.SF, true);
