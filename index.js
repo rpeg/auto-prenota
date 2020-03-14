@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 const forever = require('forever-monitor');
 
-const SmtpClient = require('./SmtpClient');
+const SmtpClient = require('./lib/SmtpClient');
 
 const child = new (forever.Monitor)('./monitor.js', {
   silent: false,
