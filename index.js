@@ -13,7 +13,6 @@ child.on('exit:code', (code) => {
   console.error(`Forever detected script exited with code ${code}`);
   const client = new SmtpClient('');
   client.notifyMe('Forever detected script exited');
-  child.restart();
 });
 
 child.on('restart', () => {
