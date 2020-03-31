@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-expressions */
 const OfficeMonitor = require('./lib/OfficeMonitor');
 
 const offices = {
@@ -8,4 +9,8 @@ const offices = {
   },
 };
 
-new OfficeMonitor(offices.SF).launch();
+const officeMonitor = new OfficeMonitor(offices.SF);
+
+officeMonitor.launch()
+  .then(() => { if (!officeMonitor.success) officeMonitor.launch(); })
+  .catch(() => { officeMonitor.launch(); });
