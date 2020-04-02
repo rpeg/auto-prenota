@@ -1,4 +1,4 @@
-/* eslint-disable no-unused-expressions */
+/* eslint-disable no-await-in-loop */
 const OfficeMonitor = require('./lib/OfficeMonitor');
 
 const offices = {
@@ -11,6 +11,4 @@ const offices = {
 
 const officeMonitor = new OfficeMonitor(offices.SF);
 
-officeMonitor.launch()
-  .then(() => { if (!officeMonitor.success) officeMonitor.launch(); })
-  .catch(() => { officeMonitor.launch(); });
+(async () => { await officeMonitor.launch(); })();
