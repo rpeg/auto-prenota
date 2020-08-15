@@ -1,4 +1,3 @@
-/* eslint-disable no-await-in-loop */
 const OfficeMonitor = require('./lib/OfficeMonitor');
 
 const offices = {
@@ -7,8 +6,12 @@ const offices = {
     name: 'SF',
     citizenship: true,
   },
+  LA: {
+    cid: 100034,
+    name: 'LA',
+    citizenship: false,
+  },
 };
 
-const officeMonitor = new OfficeMonitor(offices.SF);
-
-(async () => { await officeMonitor.launch(); })();
+new OfficeMonitor(offices.SF).launch();
+// new OfficeMonitor(offices.LA).launch();

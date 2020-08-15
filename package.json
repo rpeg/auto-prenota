@@ -27,6 +27,7 @@
     "puppeteer": "2.1.1",
     "puppeteer-extra": "3.1.9",
     "puppeteer-extra-plugin-stealth": "2.4.9",
+    "shelljs": "0.8.4",
     "shortid": "2.2.15",
     "winston": "3.2.1"
   },
