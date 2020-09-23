@@ -1,7 +1,6 @@
 .history/
 output/
-tmp/*.png
-tmp/*.jpeg
+tmp/*
 
 # Logs
 logs
