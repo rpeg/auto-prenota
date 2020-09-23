@@ -1,6 +1,6 @@
 const OfficeMonitor = require('./lib/OfficeMonitor');
 
-const offices = {
+const OFFICES = {
   SF: {
     cid: 100012,
     name: 'SF',
@@ -13,5 +13,6 @@ const offices = {
   },
 };
 
-new OfficeMonitor(offices.SF).launch();
-// new OfficeMonitor(offices.LA).launch();
+const office = process.env.OFFICE || 'SF';
+
+new OfficeMonitor(OFFICES[office]).launch();
