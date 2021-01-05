@@ -13,7 +13,7 @@
   "license": "ISC",
   "dependencies": {
     "2captcha-node": "2.0.3",
-    "axios": "0.19.2",
+    "axios": "0.21.1",
     "base64-img": "1.0.4",
     "crypto": "1.0.1",
     "dotenv": "8.2.0",
