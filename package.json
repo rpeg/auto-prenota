@@ -23,7 +23,7 @@
     "lodash": "4.17.19",
     "minimist": "1.2.5",
     "moment": "2.24.0",
-    "nodemailer": "6.4.4",
+    "nodemailer": "6.4.16",
     "puppeteer": "2.1.1",
     "puppeteer-extra": "3.1.9",
     "puppeteer-extra-plugin-stealth": "2.4.9",
